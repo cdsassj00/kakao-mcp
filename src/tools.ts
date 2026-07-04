@@ -15,7 +15,12 @@ const kindSchema = z
 
 const boxKeySchema = z.string().uuid().describe("기억상자 키 (create_memory_box로 발급받은 UUID)");
 
-export function buildServer(store: MemoryStore): McpServer {
+export interface BuildOptions {
+  /** 배포된 서버의 공개 URL (예: https://remember.example.com). 업로드 페이지 링크 안내에 사용 */
+  publicUrl?: string;
+}
+
+export function buildServer(store: MemoryStore, options: BuildOptions = {}): McpServer {
   const server = new McpServer(
     {
       name: "remember-talk",
@@ -29,6 +34,7 @@ export function buildServer(store: MemoryStore): McpServer {
         "저장은 반드시 사용자가 명시적으로 요청했을 때만 하세요. 자동으로 대화를 수집하지 마세요.",
         "약속(promise)으로 저장된 기억은 list_promises로 모아볼 수 있습니다.",
         "카카오톡 '대화 내보내기'로 뽑은 텍스트를 사용자가 붙여넣으면 import_kakao_export로 통째로 보관하고, search_chat으로 과거 대화 원문을 검색할 수 있습니다. 파일이 길면 여러 번에 나눠 임포트하면 됩니다.",
+        "내보내기 파일이 커서 붙여넣기 어렵다고 하면 upload_page_link로 업로드 페이지 주소를 안내하세요. 파일을 선택하면 자동으로 적재됩니다.",
         "search_chat 결과의 맥락이 더 필요하면 chat_context로 앞뒤 대화를 확인하세요.",
       ].join("\n"),
     }
@@ -280,6 +286,32 @@ export function buildServer(store: MemoryStore): McpServer {
         if (error instanceof StoreError) return text(error.message, true);
         throw error;
       }
+    }
+  );
+
+  server.registerTool(
+    "upload_page_link",
+    {
+      title: "대화 파일 업로드 페이지 안내",
+      description:
+        "카카오톡 '대화 내보내기' 파일을 붙여넣기 대신 파일 그대로 올릴 수 있는 업로드 페이지 주소를 알려줍니다. 파일이 크거나 모바일 사용자일 때 이 링크를 안내하세요.",
+      inputSchema: {
+        box_key: boxKeySchema.optional().describe("키를 넘기면 페이지에 미리 채워진 링크를 만들어 줍니다"),
+      },
+    },
+    async ({ box_key }) => {
+      if (!options.publicUrl) {
+        return text(
+          "업로드 페이지 주소가 설정되지 않았습니다 (서버 환경변수 PUBLIC_URL 필요). 대신 내보내기 텍스트를 채팅에 나눠 붙여넣으면 import_kakao_export로 가져올 수 있습니다.",
+          true
+        );
+      }
+      const url = box_key
+        ? `${options.publicUrl}/upload?box_key=${box_key}`
+        : `${options.publicUrl}/upload`;
+      return text(
+        `업로드 페이지: ${url}\n\n사용법을 함께 안내하세요:\n① 카카오톡 채팅방 ⚙️ 설정 → 대화 내용 내보내기 (텍스트만)\n② 위 링크를 열어 .txt 파일 선택\n③ 완료되면 이 채팅에서 바로 검색 가능 (search_chat)`
+      );
     }
   );
 

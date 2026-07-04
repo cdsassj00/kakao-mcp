@@ -15,7 +15,7 @@ describe("MCP Streamable HTTP server", () => {
   let client: Client;
 
   beforeAll(async () => {
-    const app = createApp(new MemoryStore(":memory:"));
+    const app = createApp(new MemoryStore(":memory:"), "https://remember.example.com");
     httpServer = app.listen(0);
     const address = httpServer.address();
     if (typeof address !== "object" || !address) throw new Error("no address");
@@ -49,7 +49,19 @@ describe("MCP Streamable HTTP server", () => {
       "recall",
       "remember",
       "search_chat",
+      "upload_page_link",
     ]);
+  });
+
+  it("serves the upload page and hands out its link via tool", async () => {
+    const address = httpServer.address();
+    if (typeof address !== "object" || !address) throw new Error("no address");
+    const page = await fetch(`http://127.0.0.1:${address.port}/upload`);
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain("대화 가져오기");
+
+    const link = await client.callTool({ name: "upload_page_link", arguments: {} });
+    expect(textOf(link)).toContain("https://remember.example.com/upload");
   });
 
   it("imports a KakaoTalk export and searches it", async () => {

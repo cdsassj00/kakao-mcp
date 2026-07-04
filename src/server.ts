@@ -5,16 +5,18 @@ import { dirname } from "node:path";
 import { detectRoomName, parseKakaoExport } from "./kakao-parser.js";
 import { MemoryStore, StoreError } from "./store.js";
 import { buildServer } from "./tools.js";
+import { renderUploadPage } from "./upload-page.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const DB_PATH = process.env.DB_PATH ?? "data/memories.db";
+const PUBLIC_URL = (process.env.PUBLIC_URL ?? "").replace(/\/$/, "");
 
 if (DB_PATH !== ":memory:") {
   mkdirSync(dirname(DB_PATH), { recursive: true });
 }
 const store = new MemoryStore(DB_PATH);
 
-export function createApp(sharedStore: MemoryStore = store) {
+export function createApp(sharedStore: MemoryStore = store, publicUrl: string = PUBLIC_URL) {
   const app = express();
   app.use(express.json({ limit: "1mb" }));
 
@@ -22,8 +24,14 @@ export function createApp(sharedStore: MemoryStore = store) {
     res.json({ ok: true, name: "remember-talk-mcp" });
   });
 
-  // 감시 폴더 스크립트(scripts/watch-uploads.mjs)용 대화 파일 업로드 엔드포인트.
-  // 카카오톡 '대화 내보내기' 텍스트를 통째로 받아 파싱·적재한다.
+  // 대화 내보내기 파일 업로드 페이지 (모바일/PC 공용). AI 챗의 upload_page_link
+  // 도구가 이 주소를 사용자에게 안내한다.
+  app.get("/upload", (req, res) => {
+    res.type("html").send(renderUploadPage(String(req.query.box_key ?? "")));
+  });
+
+  // 업로드 페이지와 감시 폴더 스크립트(scripts/watch-uploads.mjs)가 사용하는
+  // 대화 파일 업로드 엔드포인트. '대화 내보내기' 텍스트를 통째로 받아 파싱·적재한다.
   app.post("/import", express.text({ type: "*/*", limit: "30mb" }), (req, res) => {
     const boxKey = String(req.query.box_key ?? "");
     if (!/^[0-9a-f-]{36}$/i.test(boxKey) || !sharedStore.getBox(boxKey)) {
@@ -58,7 +66,7 @@ export function createApp(sharedStore: MemoryStore = store) {
   // Stateless Streamable HTTP: 요청마다 서버/트랜스포트를 생성해
   // 세션 상태 없이 수평 확장이 가능하도록 한다.
   app.post("/mcp", async (req, res) => {
-    const server = buildServer(sharedStore);
+    const server = buildServer(sharedStore, { publicUrl });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on("close", () => {
       void transport.close();
