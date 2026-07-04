@@ -2,6 +2,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import express from "express";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { buildGraph, renderGraphSvg } from "./graph.js";
 import { detectRoomName, parseKakaoExport } from "./kakao-parser.js";
 import { MemoryStore, StoreError } from "./store.js";
 import { buildServer } from "./tools.js";
@@ -39,6 +40,18 @@ export function createApp(sharedStore: MemoryStore = store, publicUrl: string = 
   // 도구가 이 주소를 사용자에게 안내한다.
   app.get("/upload", (req, res) => {
     res.type("html").send(renderUploadPage(String(req.query.box_key ?? "")));
+  });
+
+  // 관계망 지도 SVG — relationship_map 도구가 이 주소를 안내한다
+  app.get("/map", (req, res) => {
+    const boxKey = String(req.query.box_key ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(boxKey) || !sharedStore.getBox(boxKey)) {
+      res.status(404).type("text").send("기억상자를 찾을 수 없습니다. box_key를 확인해 주세요.");
+      return;
+    }
+    const me = String(req.query.me ?? "").trim() || undefined;
+    const graph = buildGraph(sharedStore.exportChat(boxKey));
+    res.type("image/svg+xml").send(renderGraphSvg(graph, me));
   });
 
   // 업로드 페이지와 감시 폴더 스크립트(scripts/watch-uploads.mjs)가 사용하는

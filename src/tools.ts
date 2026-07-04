@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { buildGraph, egoRelationships, GraphEdge } from "./graph.js";
 import { parseKakaoExport } from "./kakao-parser.js";
 import { ChatMessage, Memory, MemoryStore, StoreError } from "./store.js";
 
@@ -36,6 +37,7 @@ export function buildServer(store: MemoryStore, options: BuildOptions = {}): Mcp
         "카카오톡 '대화 내보내기'로 뽑은 텍스트를 사용자가 붙여넣으면 import_kakao_export로 통째로 보관하고, search_chat으로 과거 대화 원문을 검색할 수 있습니다. 파일이 길면 여러 번에 나눠 임포트하면 됩니다.",
         "내보내기 파일이 커서 붙여넣기 어렵다고 하면 upload_page_link로 업로드 페이지 주소를 안내하세요. 파일을 선택하면 자동으로 적재됩니다.",
         "search_chat 결과의 맥락이 더 필요하면 chat_context로 앞뒤 대화를 확인하세요.",
+        "대화를 임포트해 두었다면 relationship_map으로 관계망 지도(누구와 얼마나 가까운지)를, relationship_strength로 특정 인물과의 강도를 보여줄 수 있습니다. 관계 강도는 대화 빈도·최근성·상호성의 결정론적 집계이므로 근거를 함께 설명하세요.",
       ].join("\n"),
     }
   );
@@ -407,6 +409,88 @@ export function buildServer(store: MemoryStore, options: BuildOptions = {}): Mcp
   );
 
   server.registerTool(
+    "relationship_map",
+    {
+      title: "관계망 지도",
+      description:
+        "임포트된 대화에서 관계망을 계산해 가까운 사람 순위와 지도 이미지(SVG) 링크를 보여줍니다. '내 관계망 보여줘', '나 누구랑 제일 친해?' 같은 질문에 사용하세요. me에 사용자 본인의 카톡 표시 이름을 넣으면 본인 중심 지도가 됩니다.",
+      inputSchema: {
+        box_key: boxKeySchema,
+        me: z.string().max(50).optional().describe("사용자 본인의 카카오톡 표시 이름 (예: 홍길동)"),
+      },
+    },
+    async ({ box_key, me }) => {
+      const box = store.getBox(box_key);
+      if (!box) return boxNotFound();
+      const messages = store.exportChat(box_key);
+      if (messages.length === 0) {
+        return text("임포트된 대화가 없습니다. 카카오톡 '대화 내보내기' 텍스트를 먼저 넣어주세요 (import_kakao_export 또는 upload_page_link).");
+      }
+      const graph = buildGraph(messages);
+      const ranked = me ? egoRelationships(graph, me) : graph.edges;
+      if (me && ranked.length === 0) {
+        return text(
+          `「${me}」라는 이름의 발화자를 찾지 못했습니다. 등장인물: ${graph.nodes
+            .slice(0, 15)
+            .map((n) => n.name)
+            .join(", ")}\n이 중 본인 이름을 골라 다시 시도해 주세요.`,
+          true
+        );
+      }
+      const mapUrl = options.publicUrl
+        ? `${options.publicUrl}/map?box_key=${box_key}${me ? `&me=${encodeURIComponent(me)}` : ""}`
+        : null;
+      return text(
+        [
+          me
+            ? `「${me}」 중심 관계망 (인물 ${graph.nodes.length}명, 관계 ${graph.edges.length}쌍)`
+            : `관계망 (인물 ${graph.nodes.length}명, 관계 ${graph.edges.length}쌍)`,
+          ``,
+          ...ranked.slice(0, 10).map((e, i) => formatEdge(e, i + 1, me)),
+          ``,
+          mapUrl ? `🗺️ 관계망 지도 보기: ${mapUrl}` : "",
+          `* 강도는 대화 빈도 × 최근성 × 상호성의 결정론적 집계입니다 (최대 100).`,
+        ]
+          .filter(Boolean)
+          .join("\n")
+      );
+    }
+  );
+
+  server.registerTool(
+    "relationship_strength",
+    {
+      title: "관계 강도 분석",
+      description: "임포트된 대화를 바탕으로 특정 인물과의 관계 강도를 상세 분석합니다. '나랑 철수 얼마나 친해?' 같은 질문에 사용하세요.",
+      inputSchema: {
+        box_key: boxKeySchema,
+        person: z.string().max(50).describe("분석할 인물 이름"),
+        me: z.string().max(50).optional().describe("사용자 본인의 카톡 표시 이름"),
+      },
+    },
+    async ({ box_key, person, me }) => {
+      const box = store.getBox(box_key);
+      if (!box) return boxNotFound();
+      const graph = buildGraph(store.exportChat(box_key));
+      const edges = egoRelationships(graph, person).filter((e) => !me || e.a === me || e.b === me);
+      if (edges.length === 0) {
+        return text(`「${person}」와의 관계 데이터가 없습니다. 함께 있는 채팅방을 임포트했는지 확인해 주세요.`);
+      }
+      const node = graph.nodes.find((n) => n.name === person);
+      return text(
+        [
+          `「${person}」 관계 분석`,
+          `- 총 발화: ${node?.messageCount ?? 0}건, 함께한 방: ${node?.rooms.join(", ") ?? "-"}`,
+          ...edges.slice(0, 5).map((e) => {
+            const other = e.a === person ? e.b : e.a;
+            return `- ${other}와(과): 강도 ${e.score}/100, 상호작용 ${e.interactions}회, 마지막 ${e.lastAt?.slice(0, 10) ?? "?"} (${e.rooms.join(", ")})`;
+          }),
+        ].join("\n")
+      );
+    }
+  );
+
+  server.registerTool(
     "memory_stats",
     {
       title: "기억상자 현황",
@@ -456,4 +540,11 @@ function formatDate(iso: string): string {
 function formatChat(message: ChatMessage): string {
   const when = message.sent_at ? formatDate(message.sent_at) : "시각 미상";
   return `#${message.id} [${message.room}] ${when} ${message.sender}: ${message.content}`;
+}
+
+function formatEdge(edge: GraphEdge, rank: number, me?: string): string {
+  const label = me ? (edge.a === me ? edge.b : edge.a) : `${edge.a} ↔ ${edge.b}`;
+  const filled = Math.max(1, Math.round(edge.score / 20));
+  const bar = "●".repeat(filled) + "○".repeat(Math.max(0, 5 - filled));
+  return `${rank}. ${label} ${bar} ${edge.score}/100 (상호작용 ${edge.interactions}회, 마지막 ${edge.lastAt?.slice(0, 10) ?? "?"})`;
 }

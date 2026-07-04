@@ -47,10 +47,61 @@ describe("MCP Streamable HTTP server", () => {
       "memory_stats",
       "person_summary",
       "recall",
+      "relationship_map",
+      "relationship_strength",
       "remember",
       "search_chat",
       "upload_page_link",
     ]);
+  });
+
+  it("computes a relationship map from imported chats and serves the SVG", async () => {
+    const address = httpServer.address();
+    if (typeof address !== "object" || !address) throw new Error("no address");
+    const base = `http://127.0.0.1:${address.port}`;
+
+    const created = await client.callTool({ name: "create_memory_box", arguments: { name: "관계망" } });
+    const boxKey = textOf(created).match(/box_key: ([0-9a-f-]{36})/)?.[1];
+
+    await client.callTool({
+      name: "import_kakao_export",
+      arguments: {
+        box_key: boxKey,
+        room: "동창회",
+        text: [
+          "--------------- 2026년 7월 1일 수요일 ---------------",
+          "[홍길동] [오후 2:30] 이번 주말 모임 콜?",
+          "[철수] [오후 2:31] 콜",
+          "[홍길동] [오후 2:32] 영희는?",
+          "[영희] [오후 2:33] 나도 갈게",
+          "[철수] [오후 2:34] 좋다",
+        ].join("\n"),
+      },
+    });
+
+    const map = await client.callTool({
+      name: "relationship_map",
+      arguments: { box_key: boxKey, me: "홍길동" },
+    });
+    const mapText = textOf(map);
+    expect(mapText).toContain("「홍길동」 중심 관계망");
+    expect(mapText).toContain("철수");
+    expect(mapText).toContain("/100");
+    expect(mapText).toContain(`/map?box_key=${boxKey}`);
+
+    const strength = await client.callTool({
+      name: "relationship_strength",
+      arguments: { box_key: boxKey, person: "철수", me: "홍길동" },
+    });
+    expect(textOf(strength)).toContain("「철수」 관계 분석");
+
+    const svg = await fetch(`${base}/map?box_key=${boxKey}&me=${encodeURIComponent("홍길동")}`);
+    expect(svg.status).toBe(200);
+    expect(svg.headers.get("content-type")).toContain("image/svg+xml");
+    expect(await svg.text()).toContain("철수");
+
+    const missing = await fetch(`${base}/map?box_key=00000000-0000-0000-0000-000000000000`);
+    expect(missing.status).toBe(404);
   });
 
   it("serves the upload page and hands out its link via tool", async () => {
