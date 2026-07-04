@@ -89,19 +89,21 @@ export async function fetchLhNotices(
   options: { pageSize?: number; maxPages?: number; fetchFn?: typeof fetch; now?: Date } = {}
 ): Promise<LhFetchResult> {
   const pageSize = options.pageSize ?? 100;
-  const maxPages = options.maxPages ?? 3;
+  const maxPages = options.maxPages ?? 5;
   const fetchFn = options.fetchFn ?? fetch;
   const now = options.now ?? new Date();
   const notices: NoticeInput[] = [];
   let pages = 0;
 
-  // 스펙상 게시일(PAN_NT_ST_DT)·마감일(CLSG_DT)이 필수 — 최근 120일 게시 ~ 1년 내 마감 범위로 조회
+  // 실응답(dsSch 에코) 기준 실제 게시일 범위 파라미터는 PAN_ST_DT/PAN_ED_DT다
+  // (문서에는 PAN_NT_ST_DT/CLSG_DT로 적혀 있으나 서버가 무시하고 기본값 최근 2개월을 쓴다).
+  // 최근 120일 게시분을 조회한다.
   const postedFrom = yyyymmdd(new Date(now.getTime() - 120 * 86_400_000));
-  const closeTo = yyyymmdd(new Date(now.getTime() + 365 * 86_400_000));
+  const postedTo = yyyymmdd(now);
 
   for (const typeCode of LH_TYPE_CODES) {
     for (let page = 1; page <= maxPages; page++) {
-      const url = `${ENDPOINT}?serviceKey=${encodeURIComponent(serviceKey)}&PG_SZ=${pageSize}&PAGE=${page}&UPP_AIS_TP_CD=${typeCode}&PAN_NT_ST_DT=${postedFrom}&CLSG_DT=${closeTo}`;
+      const url = `${ENDPOINT}?serviceKey=${encodeURIComponent(serviceKey)}&PG_SZ=${pageSize}&PAGE=${page}&UPP_AIS_TP_CD=${typeCode}&PAN_ST_DT=${postedFrom}&PAN_ED_DT=${postedTo}`;
       const response = await fetchFn(url, { headers: { Accept: "application/json" } });
       if (!response.ok) {
         throw new Error(`LH API 응답 오류: HTTP ${response.status}`);
