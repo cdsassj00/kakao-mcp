@@ -1,7 +1,7 @@
 {
-  "name": "remember-talk-mcp",
-  "version": "0.1.0",
-  "description": "그때 뭐랬지? — 내 대화를 기억해주는 개인 기억 MCP 서버 (Kakao PlayMCP / AGENTIC PLAYER 10)",
+  "name": "saram-sajeon-mcp",
+  "version": "0.2.0",
+  "description": "사람사전 — 내 주변 사람들의 사전, 개인 인맥 기록 MCP 서버 (Kakao PlayMCP / AGENTIC PLAYER 10)",
   "type": "module",
   "main": "dist/server.js",
   "scripts": {

@@ -3,14 +3,14 @@
  * 챗에서 링크를 받아 열고, 파일을 선택하면 브라우저가 텍스트를 읽어
  * POST /import로 전송한다. 모바일/PC 모두 동작하며 파일은 서버 DB에만 저장된다.
  */
-export function renderUploadPage(prefillBoxKey: string): string {
+export function renderUploadPage(prefillBoxKey: string, serviceName = "사람사전", icon = "📖"): string {
   const safeKey = /^[0-9a-f-]{36}$/i.test(prefillBoxKey) ? prefillBoxKey : "";
   return `<!doctype html>
 <html lang="ko">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>그때 뭐랬지? — 대화 가져오기</title>
+<title>${serviceName} — 대화 가져오기</title>
 <style>
   body { font-family: -apple-system, "Malgun Gothic", sans-serif; max-width: 480px; margin: 0 auto; padding: 24px 16px; color: #222; }
   h1 { font-size: 1.3rem; }
@@ -25,7 +25,7 @@ export function renderUploadPage(prefillBoxKey: string): string {
 </style>
 </head>
 <body>
-<h1>🧠 그때 뭐랬지? — 대화 가져오기</h1>
+<h1>${icon} ${serviceName} — 대화 가져오기</h1>
 <div class="step">
   ① 카카오톡 채팅방 ⚙️ 설정 → <b>대화 내용 내보내기</b> (텍스트만)<br>
   ② 저장된 .txt 파일을 아래에서 선택<br>

@@ -23,13 +23,13 @@ export interface BuildOptions {
 export function buildServer(store: MemoryStore, options: BuildOptions = {}): McpServer {
   const server = new McpServer(
     {
-      name: "remember-talk",
-      version: "0.1.0",
+      name: "saram-sajeon",
+      version: "0.2.0",
     },
     {
       instructions: [
-        "「그때 뭐랬지?」는 사용자의 대화 내용을 사용자 동의 하에 기억해 두었다가 다시 찾아주는 개인 기억 서버입니다.",
-        "처음 사용하는 사용자에게는 create_memory_box로 기억상자를 만들어 주고, 발급된 box_key를 사용자가 꼭 보관하도록 안내하세요.",
+        "「사람사전」은 내 주변 사람들의 사전입니다. 사람과 나눈 대화·약속·취향을 사용자 동의 하에 기록해 두었다가, 사람 이름으로 찾아볼 수 있게 해주는 개인 인맥 기록 서버입니다.",
+        "처음 사용하는 사용자에게는 create_memory_box로 나만의 사전(기억상자)을 만들어 주고, 발급된 box_key를 사용자가 꼭 보관하도록 안내하세요.",
         "사용자가 대화 내용을 기억해 달라고 하면 remember로 저장하고, 과거 대화를 물어보면 recall로 검색하세요.",
         "저장은 반드시 사용자가 명시적으로 요청했을 때만 하세요. 자동으로 대화를 수집하지 마세요.",
         "약속(promise)으로 저장된 기억은 list_promises로 모아볼 수 있습니다.",

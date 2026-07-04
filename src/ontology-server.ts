@@ -2,47 +2,60 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import express from "express";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { buildGraph, renderGraphSvg } from "./graph.js";
 import { detectRoomName, parseKakaoExport } from "./kakao-parser.js";
+import { buildOntologyServer } from "./ontology-tools.js";
 import { MemoryStore, StoreError } from "./store.js";
-import { buildServer } from "./tools.js";
 import { renderUploadPage } from "./upload-page.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
-const DB_PATH = process.env.DB_PATH ?? "data/memories.db";
-const PUBLIC_URL = (
-  process.env.PUBLIC_URL ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "")
-).replace(/\/$/, "");
+const DB_PATH = process.env.DB_PATH ?? "data/ontology.db";
+const PUBLIC_URL = (process.env.PUBLIC_URL ?? "").replace(/\/$/, "");
 
-// K8s 등 실행 환경에 따라 DB_PATH가 쓰기 불가일 수 있으므로 /tmp로 폴백한다.
 function openStore(path: string): MemoryStore {
   if (path === ":memory:") return new MemoryStore(path);
   try {
     mkdirSync(dirname(path), { recursive: true });
     return new MemoryStore(path);
   } catch (error) {
-    const fallback = "/tmp/memories.db";
+    const fallback = "/tmp/ontology.db";
     console.warn(`DB 경로(${path})를 열 수 없어 ${fallback}로 폴백합니다:`, error);
     return new MemoryStore(fallback);
   }
 }
 const store = openStore(DB_PATH);
 
-export function createApp(sharedStore: MemoryStore = store, publicUrl: string = PUBLIC_URL) {
+function inferPublicUrl(req: express.Request): string {
+  const host = req.get("host");
+  if (!host) return "";
+  const isLocal = host.startsWith("localhost") || host.startsWith("127.");
+  return `${isLocal ? "http" : "https"}://${host}`;
+}
+
+export function createOntologyApp(sharedStore: MemoryStore = store, publicUrl: string = PUBLIC_URL) {
   const app = express();
   app.use(express.json({ limit: "1mb" }));
 
   app.get("/healthz", (_req, res) => {
-    res.json({ ok: true, name: "saram-sajeon-mcp" });
+    res.json({ ok: true, name: "inmaek-ontology-mcp" });
   });
 
-  // 대화 내보내기 파일 업로드 페이지 (모바일/PC 공용). AI 챗의 upload_page_link
-  // 도구가 이 주소를 사용자에게 안내한다.
   app.get("/upload", (req, res) => {
-    res.type("html").send(renderUploadPage(String(req.query.box_key ?? "")));
+    res.type("html").send(renderUploadPage(String(req.query.box_key ?? ""), "인맥 온톨로지", "🕸️"));
   });
 
-  // 업로드 페이지와 감시 폴더 스크립트(scripts/watch-uploads.mjs)가 사용하는
-  // 대화 파일 업로드 엔드포인트. '대화 내보내기' 텍스트를 통째로 받아 파싱·적재한다.
+  // 관계망 지도 SVG — relationship_map 도구가 이 주소를 안내한다
+  app.get("/map", (req, res) => {
+    const boxKey = String(req.query.box_key ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(boxKey) || !sharedStore.getBox(boxKey)) {
+      res.status(404).type("text").send("관계망을 찾을 수 없습니다. box_key를 확인해 주세요.");
+      return;
+    }
+    const me = String(req.query.me ?? "").trim() || undefined;
+    const graph = buildGraph(sharedStore.exportChat(boxKey));
+    res.type("image/svg+xml").send(renderGraphSvg(graph, me));
+  });
+
   app.post("/import", express.text({ type: "*/*", limit: "30mb" }), (req, res) => {
     const boxKey = String(req.query.box_key ?? "");
     if (!/^[0-9a-f-]{36}$/i.test(boxKey) || !sharedStore.getBox(boxKey)) {
@@ -61,7 +74,6 @@ export function createApp(sharedStore: MemoryStore = store, publicUrl: string = 
       return;
     }
     try {
-      // 같은 방을 다시 업로드하면 전체를 갈아끼워 중복을 방지한다 (재내보내기 = 최신 전체본).
       const replaced = sharedStore.deleteRoom(boxKey, room);
       const result = sharedStore.importChatMessages(boxKey, room, parsed);
       res.json({ ok: true, room, imported: result.imported, replaced, total: result.total });
@@ -74,10 +86,8 @@ export function createApp(sharedStore: MemoryStore = store, publicUrl: string = 
     }
   });
 
-  // Stateless Streamable HTTP: 요청마다 서버/트랜스포트를 생성해
-  // 세션 상태 없이 수평 확장이 가능하도록 한다.
   app.post("/mcp", async (req, res) => {
-    const server = buildServer(sharedStore, { publicUrl: publicUrl || inferPublicUrl(req) });
+    const server = buildOntologyServer(sharedStore, { publicUrl: publicUrl || inferPublicUrl(req) });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on("close", () => {
       void transport.close();
@@ -111,18 +121,9 @@ export function createApp(sharedStore: MemoryStore = store, publicUrl: string = 
   return app;
 }
 
-// PUBLIC_URL 미설정 환경(PlayMCP in KC 등)에서는 요청 Host로 공개 주소를 유추한다.
-// 로컬 접속만 http로 취급하고, 외부 도메인은 인그레스 뒤에 있어도 https로 안내한다.
-function inferPublicUrl(req: express.Request): string {
-  const host = req.get("host");
-  if (!host) return "";
-  const isLocal = host.startsWith("localhost") || host.startsWith("127.");
-  return `${isLocal ? "http" : "https"}://${host}`;
-}
-
-const isDirectRun = process.argv[1]?.endsWith("server.js") || process.argv[1]?.endsWith("server.ts");
+const isDirectRun = process.argv[1]?.endsWith("ontology-server.js") || process.argv[1]?.endsWith("ontology-server.ts");
 if (isDirectRun) {
-  createApp().listen(PORT, () => {
-    console.log(`remember-talk MCP server listening on :${PORT} (db: ${DB_PATH})`);
+  createOntologyApp().listen(PORT, () => {
+    console.log(`inmaek-ontology MCP server listening on :${PORT} (db: ${DB_PATH})`);
   });
 }

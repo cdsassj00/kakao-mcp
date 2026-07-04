@@ -331,6 +331,12 @@ export class MemoryStore {
       .all(boxId, target.room, messageId - around, messageId + around) as ChatMessage[];
   }
 
+  exportChat(boxId: string): ChatMessage[] {
+    return this.db
+      .prepare("SELECT * FROM chat_messages WHERE box_id = ? ORDER BY id ASC")
+      .all(boxId) as ChatMessage[];
+  }
+
   listRooms(boxId: string): RoomStat[] {
     return this.db
       .prepare(
