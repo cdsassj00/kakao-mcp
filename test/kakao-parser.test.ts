@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { parseKakaoExport } from "../src/kakao-parser.js";
+import { detectRoomName, parseKakaoExport } from "../src/kakao-parser.js";
+
+describe("detectRoomName", () => {
+  it("detects 1:1 room name from header", () => {
+    expect(detectRoomName("철수 님과 카카오톡 대화\n저장한 날짜 : 2026-07-04")).toBe("철수");
+  });
+
+  it("detects group room name with member count", () => {
+    expect(detectRoomName("가족방 4 님과 카카오톡 대화\n...")).toBe("가족방");
+  });
+
+  it("returns null when there is no header", () => {
+    expect(detectRoomName("[철수] [오후 2:30] 안녕")).toBeNull();
+  });
+});
 
 describe("parseKakaoExport", () => {
   it("parses PC (Windows) export format with date dividers", () => {

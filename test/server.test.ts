@@ -114,6 +114,58 @@ describe("MCP Streamable HTTP server", () => {
     expect(textOf(promises)).toContain("약속 1건");
   });
 
+  it("accepts uploads on /import and replaces re-uploaded rooms", async () => {
+    const address = httpServer.address();
+    if (typeof address !== "object" || !address) throw new Error("no address");
+    const base = `http://127.0.0.1:${address.port}`;
+
+    const created = await client.callTool({
+      name: "create_memory_box",
+      arguments: { name: "업로드테스트" },
+    });
+    const boxKey = textOf(created).match(/box_key: ([0-9a-f-]{36})/)?.[1];
+
+    const exportText = [
+      "영희 님과 카카오톡 대화",
+      "저장한 날짜 : 2026-07-04 12:00:00",
+      "",
+      "--------------- 2026년 7월 3일 금요일 ---------------",
+      "[영희] [오후 3:00] 계좌번호 보낼게 123-456",
+      "[나] [오후 3:01] 고마워",
+    ].join("\n");
+
+    const first = await fetch(`${base}/import?box_key=${boxKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+      body: exportText,
+    });
+    const firstResult = await first.json();
+    expect(firstResult).toMatchObject({ ok: true, room: "영희", imported: 2, replaced: 0 });
+
+    // 같은 방 재업로드 → 교체되어 중복이 생기지 않는다
+    const second = await fetch(`${base}/import?box_key=${boxKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+      body: exportText,
+    });
+    const secondResult = await second.json();
+    expect(secondResult).toMatchObject({ ok: true, imported: 2, replaced: 2 });
+
+    const found = await client.callTool({
+      name: "search_chat",
+      arguments: { box_key: boxKey, query: "계좌번호" },
+    });
+    expect(textOf(found)).toContain("1건");
+    expect(textOf(found)).toContain("123-456");
+
+    const unauthorized = await fetch(`${base}/import?box_key=00000000-0000-0000-0000-000000000000`, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+      body: exportText,
+    });
+    expect(unauthorized.status).toBe(401);
+  });
+
   it("returns a friendly error for an unknown box", async () => {
     const result = await client.callTool({
       name: "recall",

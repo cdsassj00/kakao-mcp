@@ -38,6 +38,21 @@ function isoAt(year: number, month: number, day: number, hour: number, minute: n
   return `${year}-${pad(month)}-${pad(day)}T${pad(hour)}:${pad(minute)}`;
 }
 
+/**
+ * 내보내기 파일 머리글에서 채팅방 이름을 추출한다.
+ * 예: "철수 님과 카카오톡 대화", "가족방 3 님과 카카오톡 대화" (플랫폼별 변형 포함)
+ */
+export function detectRoomName(text: string): string | null {
+  for (const rawLine of text.split(/\r?\n/).slice(0, 5)) {
+    const line = rawLine.trim();
+    const match =
+      line.match(/^(.+?)\s*\d*\s*님과(?:의)?\s*카카오톡\s*대화/) ??
+      line.match(/^(.+?)\s*카카오톡\s*대화\s*(?:내용|백업)?$/);
+    if (match && match[1].trim()) return match[1].trim();
+  }
+  return null;
+}
+
 export function parseKakaoExport(text: string): ParsedMessage[] {
   const messages: ParsedMessage[] = [];
   let currentDate: { year: number; month: number; day: number } | null = null;

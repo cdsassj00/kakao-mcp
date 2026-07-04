@@ -2,7 +2,8 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import express from "express";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { MemoryStore } from "./store.js";
+import { detectRoomName, parseKakaoExport } from "./kakao-parser.js";
+import { MemoryStore, StoreError } from "./store.js";
 import { buildServer } from "./tools.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -19,6 +20,39 @@ export function createApp(sharedStore: MemoryStore = store) {
 
   app.get("/healthz", (_req, res) => {
     res.json({ ok: true, name: "remember-talk-mcp" });
+  });
+
+  // 감시 폴더 스크립트(scripts/watch-uploads.mjs)용 대화 파일 업로드 엔드포인트.
+  // 카카오톡 '대화 내보내기' 텍스트를 통째로 받아 파싱·적재한다.
+  app.post("/import", express.text({ type: "*/*", limit: "30mb" }), (req, res) => {
+    const boxKey = String(req.query.box_key ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(boxKey) || !sharedStore.getBox(boxKey)) {
+      res.status(401).json({ ok: false, error: "유효한 box_key가 필요합니다." });
+      return;
+    }
+    const body = typeof req.body === "string" ? req.body : "";
+    const room = String(req.query.room ?? "").trim() || detectRoomName(body);
+    if (!room) {
+      res.status(400).json({ ok: false, error: "채팅방 이름을 인식하지 못했습니다. ?room= 파라미터로 지정해 주세요." });
+      return;
+    }
+    const parsed = parseKakaoExport(body);
+    if (parsed.length === 0) {
+      res.status(400).json({ ok: false, error: "카카오톡 내보내기 형식의 메시지를 찾지 못했습니다." });
+      return;
+    }
+    try {
+      // 같은 방을 다시 업로드하면 전체를 갈아끼워 중복을 방지한다 (재내보내기 = 최신 전체본).
+      const replaced = sharedStore.deleteRoom(boxKey, room);
+      const result = sharedStore.importChatMessages(boxKey, room, parsed);
+      res.json({ ok: true, room, imported: result.imported, replaced, total: result.total });
+    } catch (error) {
+      if (error instanceof StoreError) {
+        res.status(422).json({ ok: false, error: error.message });
+        return;
+      }
+      throw error;
+    }
   });
 
   // Stateless Streamable HTTP: 요청마다 서버/트랜스포트를 생성해
