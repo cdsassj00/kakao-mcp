@@ -1,0 +1,110 @@
+# 그때 뭐랬지? 🧠💬
+
+> 내 대화를 기억해주는 개인 기억(Personal Memory) MCP 서버
+> — Kakao PlayMCP **AGENTIC PLAYER 10** 출품작
+
+"철수랑 마지막에 무슨 얘기했더라?", "지난달에 약속한 게 뭐였지?"
+사람은 대화를 잊지만, 「그때 뭐랬지?」는 잊지 않습니다.
+
+대부분의 MCP 서버가 **외부 API를 연동**하는 데 그치는 것과 달리, 이 서버는
+**사용자 동의 하에 사용자의 대화 내용 자체를 DB화**하고 MCP 도구로 다시 꺼내 쓰게 하는
+**개인 기억 저장소**라는 새로운 발상에서 출발했습니다.
+
+## 어떻게 쓰나요?
+
+AI 채팅(PlayMCP AI 채팅, Kakao Tools 등)에서 자연어로 대화하면 에이전트가 도구를 호출합니다.
+
+```
+👤 "기억상자 하나 만들어줘"
+🤖 → create_memory_box → "box_key를 안전한 곳에 보관하세요!"
+
+👤 "철수랑 다음주 화요일에 점심 먹기로 한 거 기억해줘"
+🤖 → remember(person: 철수, kind: promise, happened_at: ...)
+
+... 2주 뒤 ...
+
+👤 "나 철수랑 뭐 하기로 했었지?"
+🤖 → recall(query: "철수") → "다음주 화요일 점심 약속이 있었어요"
+
+👤 "영희에 대해 내가 기억해둔 거 다 보여줘"
+🤖 → person_summary(person: 영희) → 취향/약속/메모 정리
+```
+
+## MCP 도구 목록
+
+| 도구 | 설명 |
+|---|---|
+| `create_memory_box` | 기억상자 생성, 접근 키(box_key) 발급 |
+| `remember` | 대화 내용 저장 (사람, 종류, 태그, 날짜 포함) |
+| `recall` | 키워드/사람/종류로 기억 검색 |
+| `person_summary` | 특정 사람에 대한 기억을 종류별로 요약 |
+| `list_people` | 기억에 등장하는 사람 목록 |
+| `list_promises` | 약속만 날짜순으로 조회 |
+| `memory_stats` | 기억상자 현황 |
+| `forget` | 개별 기억 삭제 |
+| `delete_memory_box` | 상자 전체 영구 삭제 |
+| `export_memories` | 전체 기억 JSON 내보내기 |
+
+기억 종류(kind): `note`(메모) · `promise`(약속) · `preference`(취향)
+
+## 설계 포인트
+
+- **Streamable HTTP (stateless)**: 요청마다 MCP 서버 인스턴스를 생성하는 무상태 구조로, 세션 관리 없이 수평 확장이 가능합니다. PlayMCP가 요구하는 원격 HTTPS Endpoint에 그대로 연결됩니다.
+- **한국어 검색**: SQLite FTS5 트라이그램은 한국어 2글자 토큰("점심", "약속")을 매칭하지 못하는 제약이 있어, 개인 기억 규모(상자당 최대 5,000건)에 맞는 **다중 토큰 AND 매칭 + 출현 빈도 스코어링**을 자체 구현했습니다.
+- **프라이버시 우선**: 자동 수집 없음, UUID 키 기반 상자 격리, 삭제·내보내기 도구 제공. 자세한 내용은 [PRIVACY.md](./PRIVACY.md) 참고.
+
+## 개발
+
+```bash
+npm install
+npm run dev        # 개발 서버 (기본 :3000)
+npm test           # 테스트 (vitest)
+npm run build      # dist/ 빌드
+npm start          # 프로덕션 실행
+```
+
+환경변수:
+
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `PORT` | `3000` | 리스닝 포트 |
+| `DB_PATH` | `data/memories.db` | SQLite 파일 경로 (`:memory:` 가능) |
+
+엔드포인트:
+- `POST /mcp` — MCP Streamable HTTP 엔드포인트
+- `GET /healthz` — 헬스체크
+
+로컬 확인:
+
+```bash
+curl -X POST http://localhost:3000/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
+```
+
+## 배포 (카카오클라우드 → PlayMCP)
+
+1. 컨테이너 빌드/실행:
+   ```bash
+   docker build -t remember-talk-mcp .
+   docker run -p 3000:3000 -v $(pwd)/data:/data remember-talk-mcp
+   ```
+2. 카카오클라우드 등에 배포해 HTTPS Endpoint 확보 (`https://<도메인>/mcp`)
+   - `DB_PATH`가 가리키는 볼륨을 영속 스토리지로 마운트할 것
+3. [PlayMCP 개발자 콘솔](https://playmcp.kakao.com/)에서 MCP 서버 등록 → Endpoint 입력
+4. AI 채팅에서 도구 동작 테스트
+5. 서버 공개 상태를 **전체 공개**로 전환
+6. 페이지 하단 **Player 예선 참여** 버튼으로 접수 (마감: 7/14)
+
+## 로드맵 (본선 고도화 후보)
+
+- [ ] 카카오 OAuth 연동 — 키 없이 계정 기반 접근
+- [ ] 약속 리마인더 — 다가오는 약속 알림
+- [ ] 임베딩 기반 의미 검색 — "돈 얘기" → 축의금/월급 기억까지 검색
+- [ ] box_key 파생 키를 이용한 at-rest 암호화
+- [ ] 기억 자동 요약 — 사람별 관계 타임라인 생성
+
+## 라이선스
+
+MIT
