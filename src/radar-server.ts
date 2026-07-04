@@ -23,9 +23,14 @@ function openStore(path: string): RadarStore {
 }
 const store = openStore(DB_PATH);
 
+/** 서비스키: 환경변수(LH_SERVICE_KEY)가 있으면 우선, 없으면 /setup으로 저장된 값 */
+function resolveServiceKey(target: RadarStore): string | null {
+  return process.env.LH_SERVICE_KEY?.trim() || target.getConfig("lh_service_key");
+}
+
 /** LH 공고를 수집해 DB에 반영. 키가 없으면 조용히 건너뛴다 */
 export async function refreshNotices(target: RadarStore = store): Promise<{ fetched: number; added: number } | null> {
-  const serviceKey = target.getConfig("lh_service_key");
+  const serviceKey = resolveServiceKey(target);
   if (!serviceKey) return null;
   const { notices } = await fetchLhNotices(serviceKey);
   let added = 0;

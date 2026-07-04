@@ -245,7 +245,7 @@ function formatNotice(notice: Notice, today?: string): string {
 }
 
 function emptyMessage(store: RadarStore): string {
-  const hasKey = store.getConfig("lh_service_key");
+  const hasKey = process.env.LH_SERVICE_KEY?.trim() || store.getConfig("lh_service_key");
   return hasKey
     ? "조건에 맞는 공고가 없습니다. 지역이나 유형을 넓혀 다시 검색해 보세요."
     : "공고 데이터가 아직 준비되지 않았습니다 (서버 초기 설정 중). 잠시 후 다시 시도해 주세요.";
