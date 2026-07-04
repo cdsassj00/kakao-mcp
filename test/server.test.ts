@@ -187,3 +187,21 @@ describe("MCP Streamable HTTP server", () => {
     expect(textOf(result)).toContain("기억상자를 찾을 수 없습니다");
   });
 });
+
+describe("PUBLIC_URL 미설정 시 Host 헤더로 업로드 링크 유추", () => {
+  it("infers the upload link from the request host", async () => {
+    const app = createApp(new MemoryStore(":memory:"), "");
+    const httpServer = app.listen(0);
+    const address = httpServer.address();
+    if (typeof address !== "object" || !address) throw new Error("no address");
+
+    const client = new Client({ name: "test-client-2", version: "0.0.1" });
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${address.port}/mcp`))
+    );
+    const link = await client.callTool({ name: "upload_page_link", arguments: {} });
+    expect(textOf(link)).toContain(`http://127.0.0.1:${address.port}/upload`);
+    await client.close();
+    httpServer.close();
+  });
+});

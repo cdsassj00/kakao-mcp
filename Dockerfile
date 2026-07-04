@@ -13,6 +13,7 @@ ENV NODE_ENV=production PORT=3000 DB_PATH=/data/memories.db
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./
-VOLUME /data
+# 비루트로 실행되는 환경(K8s 등)에서도 DB 디렉토리에 쓸 수 있게 한다
+RUN mkdir -p /data && chmod 777 /data
 EXPOSE 3000
 CMD ["node", "dist/server.js"]

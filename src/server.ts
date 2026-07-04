@@ -13,10 +13,19 @@ const PUBLIC_URL = (
   process.env.PUBLIC_URL ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "")
 ).replace(/\/$/, "");
 
-if (DB_PATH !== ":memory:") {
-  mkdirSync(dirname(DB_PATH), { recursive: true });
+// K8s 등 실행 환경에 따라 DB_PATH가 쓰기 불가일 수 있으므로 /tmp로 폴백한다.
+function openStore(path: string): MemoryStore {
+  if (path === ":memory:") return new MemoryStore(path);
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    return new MemoryStore(path);
+  } catch (error) {
+    const fallback = "/tmp/memories.db";
+    console.warn(`DB 경로(${path})를 열 수 없어 ${fallback}로 폴백합니다:`, error);
+    return new MemoryStore(fallback);
+  }
 }
-const store = new MemoryStore(DB_PATH);
+const store = openStore(DB_PATH);
 
 export function createApp(sharedStore: MemoryStore = store, publicUrl: string = PUBLIC_URL) {
   const app = express();
@@ -68,7 +77,7 @@ export function createApp(sharedStore: MemoryStore = store, publicUrl: string = 
   // Stateless Streamable HTTP: 요청마다 서버/트랜스포트를 생성해
   // 세션 상태 없이 수평 확장이 가능하도록 한다.
   app.post("/mcp", async (req, res) => {
-    const server = buildServer(sharedStore, { publicUrl });
+    const server = buildServer(sharedStore, { publicUrl: publicUrl || inferPublicUrl(req) });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on("close", () => {
       void transport.close();
@@ -100,6 +109,15 @@ export function createApp(sharedStore: MemoryStore = store, publicUrl: string = 
   app.delete("/mcp", methodNotAllowed);
 
   return app;
+}
+
+// PUBLIC_URL 미설정 환경(PlayMCP in KC 등)에서는 요청 Host로 공개 주소를 유추한다.
+// 로컬 접속만 http로 취급하고, 외부 도메인은 인그레스 뒤에 있어도 https로 안내한다.
+function inferPublicUrl(req: express.Request): string {
+  const host = req.get("host");
+  if (!host) return "";
+  const isLocal = host.startsWith("localhost") || host.startsWith("127.");
+  return `${isLocal ? "http" : "https"}://${host}`;
 }
 
 const isDirectRun = process.argv[1]?.endsWith("server.js") || process.argv[1]?.endsWith("server.ts");
