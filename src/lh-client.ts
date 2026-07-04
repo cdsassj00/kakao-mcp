@@ -80,19 +80,28 @@ export interface LhFetchResult {
 }
 
 /** 유형코드별로 최근 공고를 페이지 단위로 수집 */
+function yyyymmdd(date: Date): string {
+  return date.toISOString().slice(0, 10).replace(/-/g, "");
+}
+
 export async function fetchLhNotices(
   serviceKey: string,
-  options: { pageSize?: number; maxPages?: number; fetchFn?: typeof fetch } = {}
+  options: { pageSize?: number; maxPages?: number; fetchFn?: typeof fetch; now?: Date } = {}
 ): Promise<LhFetchResult> {
   const pageSize = options.pageSize ?? 100;
   const maxPages = options.maxPages ?? 3;
   const fetchFn = options.fetchFn ?? fetch;
+  const now = options.now ?? new Date();
   const notices: NoticeInput[] = [];
   let pages = 0;
 
+  // 스펙상 게시일(PAN_NT_ST_DT)·마감일(CLSG_DT)이 필수 — 최근 120일 게시 ~ 1년 내 마감 범위로 조회
+  const postedFrom = yyyymmdd(new Date(now.getTime() - 120 * 86_400_000));
+  const closeTo = yyyymmdd(new Date(now.getTime() + 365 * 86_400_000));
+
   for (const typeCode of LH_TYPE_CODES) {
     for (let page = 1; page <= maxPages; page++) {
-      const url = `${ENDPOINT}?serviceKey=${encodeURIComponent(serviceKey)}&PG_SZ=${pageSize}&PAGE=${page}&UPP_AIS_TP_CD=${typeCode}`;
+      const url = `${ENDPOINT}?serviceKey=${encodeURIComponent(serviceKey)}&PG_SZ=${pageSize}&PAGE=${page}&UPP_AIS_TP_CD=${typeCode}&PAN_NT_ST_DT=${postedFrom}&CLSG_DT=${closeTo}`;
       const response = await fetchFn(url, { headers: { Accept: "application/json" } });
       if (!response.ok) {
         throw new Error(`LH API 응답 오류: HTTP ${response.status}`);

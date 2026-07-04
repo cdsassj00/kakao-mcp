@@ -70,6 +70,8 @@ describe("lh-client", () => {
     expect(result.notices).toHaveLength(4);
     expect(calls[0]).toContain("UPP_AIS_TP_CD=05");
     expect(calls[1]).toContain("UPP_AIS_TP_CD=06");
+    expect(calls[0]).toMatch(/PAN_NT_ST_DT=\d{8}/);
+    expect(calls[0]).toMatch(/CLSG_DT=\d{8}/);
   });
 });
 
