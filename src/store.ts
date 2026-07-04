@@ -26,6 +26,22 @@ export interface PersonStat {
   last_at: string;
 }
 
+export interface ChatMessage {
+  id: number;
+  box_id: string;
+  room: string;
+  sender: string;
+  sent_at: string | null;
+  content: string;
+}
+
+export interface RoomStat {
+  room: string;
+  count: number;
+  first_at: string | null;
+  last_at: string | null;
+}
+
 interface MemoryRow {
   id: number;
   box_id: string;
@@ -39,6 +55,7 @@ interface MemoryRow {
 
 const MAX_MEMORIES_PER_BOX = 5000;
 const MAX_CONTENT_LENGTH = 4000;
+const MAX_CHAT_MESSAGES_PER_BOX = 200_000;
 
 export class MemoryStore {
   private db: Database.Database;
@@ -69,6 +86,15 @@ export class MemoryStore {
       );
       CREATE INDEX IF NOT EXISTS idx_memories_box ON memories(box_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_memories_person ON memories(box_id, person);
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        box_id TEXT NOT NULL REFERENCES boxes(id) ON DELETE CASCADE,
+        room TEXT NOT NULL,
+        sender TEXT NOT NULL,
+        sent_at TEXT,
+        content TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_box_room ON chat_messages(box_id, room, sent_at);
     `);
   }
 
@@ -229,6 +255,98 @@ export class MemoryStore {
     return rows.map(toMemory);
   }
 
+  importChatMessages(
+    boxId: string,
+    room: string,
+    messages: { sender: string; sentAt: string | null; content: string }[]
+  ): { imported: number; total: number } {
+    const roomName = room.trim();
+    if (!roomName) throw new StoreError("채팅방 이름이 비어 있습니다.");
+    const count = (
+      this.db.prepare("SELECT COUNT(*) c FROM chat_messages WHERE box_id = ?").get(boxId) as { c: number }
+    ).c;
+    if (count + messages.length > MAX_CHAT_MESSAGES_PER_BOX) {
+      throw new StoreError(
+        `대화 보관함이 가득 찹니다 (최대 ${MAX_CHAT_MESSAGES_PER_BOX}건, 현재 ${count}건). 오래된 채팅방을 delete_chat_room으로 정리해 주세요.`
+      );
+    }
+    const insert = this.db.prepare(
+      "INSERT INTO chat_messages (box_id, room, sender, sent_at, content) VALUES (?, ?, ?, ?, ?)"
+    );
+    const insertAll = this.db.transaction(() => {
+      for (const message of messages) {
+        insert.run(boxId, roomName, message.sender, message.sentAt, message.content);
+      }
+    });
+    insertAll();
+    return { imported: messages.length, total: count + messages.length };
+  }
+
+  searchChat(input: {
+    boxId: string;
+    query?: string;
+    room?: string;
+    sender?: string;
+    limit?: number;
+  }): ChatMessage[] {
+    const limit = Math.min(Math.max(input.limit ?? 10, 1), 50);
+    const conditions: string[] = ["box_id = ?"];
+    const params: unknown[] = [input.boxId];
+    if (input.room) {
+      conditions.push("room LIKE ? ESCAPE '\\'");
+      params.push(`%${escapeLike(input.room.trim())}%`);
+    }
+    if (input.sender) {
+      conditions.push("sender LIKE ? ESCAPE '\\'");
+      params.push(`%${escapeLike(input.sender.trim())}%`);
+    }
+    const tokens = (input.query ?? "")
+      .split(/\s+/)
+      .map((t) => t.trim())
+      .filter(Boolean)
+      .slice(0, 8);
+    for (const token of tokens) {
+      conditions.push("(content LIKE ? ESCAPE '\\' OR sender LIKE ? ESCAPE '\\')");
+      const pattern = `%${escapeLike(token)}%`;
+      params.push(pattern, pattern);
+    }
+    return this.db
+      .prepare(
+        `SELECT * FROM chat_messages WHERE ${conditions.join(" AND ")}
+         ORDER BY COALESCE(sent_at, '') DESC, id DESC LIMIT ?`
+      )
+      .all(...params, limit) as ChatMessage[];
+  }
+
+  /** 특정 메시지 전후의 대화 흐름을 함께 조회 (검색 결과의 맥락 확인용) */
+  chatContext(boxId: string, messageId: number, around = 5): ChatMessage[] {
+    const target = this.db
+      .prepare("SELECT * FROM chat_messages WHERE box_id = ? AND id = ?")
+      .get(boxId, messageId) as ChatMessage | undefined;
+    if (!target) return [];
+    return this.db
+      .prepare(
+        `SELECT * FROM chat_messages WHERE box_id = ? AND room = ? AND id BETWEEN ? AND ? ORDER BY id ASC`
+      )
+      .all(boxId, target.room, messageId - around, messageId + around) as ChatMessage[];
+  }
+
+  listRooms(boxId: string): RoomStat[] {
+    return this.db
+      .prepare(
+        `SELECT room, COUNT(*) AS count, MIN(sent_at) AS first_at, MAX(sent_at) AS last_at
+         FROM chat_messages WHERE box_id = ? GROUP BY room ORDER BY last_at DESC`
+      )
+      .all(boxId) as RoomStat[];
+  }
+
+  deleteRoom(boxId: string, room: string): number {
+    const result = this.db
+      .prepare("DELETE FROM chat_messages WHERE box_id = ? AND room = ?")
+      .run(boxId, room.trim());
+    return result.changes;
+  }
+
   exportAll(boxId: string): { box: MemoryBox; memories: Memory[] } | null {
     const box = this.getBox(boxId);
     if (!box) return null;
@@ -236,6 +354,10 @@ export class MemoryStore {
       .prepare("SELECT * FROM memories WHERE box_id = ? ORDER BY id ASC")
       .all(boxId) as MemoryRow[];
     return { box, memories: rows.map(toMemory) };
+  }
+
+  chatCount(boxId: string): number {
+    return (this.db.prepare("SELECT COUNT(*) c FROM chat_messages WHERE box_id = ?").get(boxId) as { c: number }).c;
   }
 
   stats(boxId: string): { total: number; byKind: Record<string, number>; people: number } {

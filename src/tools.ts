@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { Memory, MemoryStore, StoreError } from "./store.js";
+import { parseKakaoExport } from "./kakao-parser.js";
+import { ChatMessage, Memory, MemoryStore, StoreError } from "./store.js";
 
 const KIND_LABEL: Record<string, string> = {
   note: "메모",
@@ -27,6 +28,8 @@ export function buildServer(store: MemoryStore): McpServer {
         "사용자가 대화 내용을 기억해 달라고 하면 remember로 저장하고, 과거 대화를 물어보면 recall로 검색하세요.",
         "저장은 반드시 사용자가 명시적으로 요청했을 때만 하세요. 자동으로 대화를 수집하지 마세요.",
         "약속(promise)으로 저장된 기억은 list_promises로 모아볼 수 있습니다.",
+        "카카오톡 '대화 내보내기'로 뽑은 텍스트를 사용자가 붙여넣으면 import_kakao_export로 통째로 보관하고, search_chat으로 과거 대화 원문을 검색할 수 있습니다. 파일이 길면 여러 번에 나눠 임포트하면 됩니다.",
+        "search_chat 결과의 맥락이 더 필요하면 chat_context로 앞뒤 대화를 확인하세요.",
       ].join("\n"),
     }
   );
@@ -245,6 +248,133 @@ export function buildServer(store: MemoryStore): McpServer {
   );
 
   server.registerTool(
+    "import_kakao_export",
+    {
+      title: "카카오톡 대화 가져오기",
+      description:
+        "카카오톡 '대화 내보내기'(채팅방 설정 > 대화 내보내기)로 저장한 텍스트를 붙여넣으면 대화 원문을 통째로 보관합니다. PC/Android/iOS 내보내기 형식을 모두 지원합니다. 텍스트가 길면 잘라서 여러 번 호출하세요 (호출당 최대 약 400KB). 같은 채팅방을 다시 임포트하면 중복되므로, 다시 가져올 때는 먼저 delete_chat_room으로 비우라고 안내하세요.",
+      inputSchema: {
+        box_key: boxKeySchema,
+        room: z.string().max(100).describe("채팅방 이름 (예: 철수, 가족 단톡방)"),
+        text: z.string().max(400_000).describe("내보내기 파일의 텍스트 내용 (일부분씩 나눠도 됨)"),
+      },
+    },
+    async ({ box_key, room, text: exportText }) => {
+      const box = store.getBox(box_key);
+      if (!box) return boxNotFound();
+      const parsed = parseKakaoExport(exportText);
+      if (parsed.length === 0) {
+        return text(
+          "메시지를 하나도 인식하지 못했습니다. 카카오톡 '대화 내보내기' 원본 텍스트인지 확인해 주세요. (지원 형식: [이름] [오후 2:30] 내용 / 2026년 7월 4일 오후 2:30, 이름 : 내용 / 2026. 7. 4. 오후 2:30, 이름 : 내용)",
+          true
+        );
+      }
+      try {
+        const result = store.importChatMessages(box_key, room, parsed);
+        const first = parsed[0].sentAt ?? "?";
+        const last = parsed[parsed.length - 1].sentAt ?? "?";
+        return text(
+          `「${room}」 대화 ${result.imported}건을 가져왔습니다 (기간: ${first} ~ ${last}).\n기억상자 전체 보관 대화: ${result.total}건.\n이어지는 부분이 있으면 같은 방 이름으로 계속 임포트하세요.`
+        );
+      } catch (error) {
+        if (error instanceof StoreError) return text(error.message, true);
+        throw error;
+      }
+    }
+  );
+
+  server.registerTool(
+    "search_chat",
+    {
+      title: "카카오톡 대화 검색",
+      description:
+        "임포트해 둔 카카오톡 대화 원문에서 키워드로 검색합니다. '철수가 식당 이름 뭐라고 했지?', '단톡방에서 계좌번호 얘기 찾아줘' 같은 질문에 사용하세요. 키워드는 공백으로 구분하면 모두 포함된 메시지를 찾습니다.",
+      inputSchema: {
+        box_key: boxKeySchema,
+        query: z.string().max(200).describe("검색 키워드 (공백 구분)"),
+        room: z.string().max(100).optional().describe("특정 채팅방으로 필터"),
+        sender: z.string().max(50).optional().describe("특정 발신자로 필터"),
+        limit: z.number().int().min(1).max(50).optional().describe("최대 결과 수 (기본 10)"),
+      },
+    },
+    async ({ box_key, query, room, sender, limit }) => {
+      const box = store.getBox(box_key);
+      if (!box) return boxNotFound();
+      const results = store.searchChat({ boxId: box_key, query, room, sender, limit });
+      if (results.length === 0) {
+        return text("검색 결과가 없습니다. 다른 키워드를 쓰거나 list_chat_rooms로 임포트된 채팅방을 확인해 보세요.");
+      }
+      return text(
+        `${results.length}건을 찾았습니다. (앞뒤 대화가 필요하면 chat_context에 메시지 번호를 넘기세요)\n\n${results
+          .map(formatChat)
+          .join("\n")}`
+      );
+    }
+  );
+
+  server.registerTool(
+    "chat_context",
+    {
+      title: "대화 맥락 보기",
+      description: "search_chat으로 찾은 메시지의 앞뒤 대화 흐름을 보여줍니다.",
+      inputSchema: {
+        box_key: boxKeySchema,
+        message_id: z.number().int().describe("기준 메시지 번호 (#id)"),
+        around: z.number().int().min(1).max(20).optional().describe("앞뒤로 몇 개씩 볼지 (기본 5)"),
+      },
+    },
+    async ({ box_key, message_id, around }) => {
+      const box = store.getBox(box_key);
+      if (!box) return boxNotFound();
+      const messages = store.chatContext(box_key, message_id, around ?? 5);
+      if (messages.length === 0) return text(`메시지 #${message_id}를 찾을 수 없습니다.`, true);
+      return text(messages.map((m) => (m.id === message_id ? `▶ ${formatChat(m)}` : formatChat(m))).join("\n"));
+    }
+  );
+
+  server.registerTool(
+    "list_chat_rooms",
+    {
+      title: "임포트된 채팅방 목록",
+      description: "가져온 카카오톡 채팅방 목록과 각 방의 메시지 수, 대화 기간을 보여줍니다.",
+      inputSchema: { box_key: boxKeySchema },
+    },
+    async ({ box_key }) => {
+      const box = store.getBox(box_key);
+      if (!box) return boxNotFound();
+      const rooms = store.listRooms(box_key);
+      if (rooms.length === 0) {
+        return text("아직 가져온 대화가 없습니다. 카카오톡 채팅방 설정 > 대화 내보내기로 텍스트를 뽑아 import_kakao_export로 가져올 수 있습니다.");
+      }
+      return text(
+        rooms
+          .map((r) => `- ${r.room}: ${r.count}건 (${r.first_at?.slice(0, 10) ?? "?"} ~ ${r.last_at?.slice(0, 10) ?? "?"})`)
+          .join("\n")
+      );
+    }
+  );
+
+  server.registerTool(
+    "delete_chat_room",
+    {
+      title: "채팅방 대화 삭제",
+      description: "임포트한 특정 채팅방의 대화를 전부 삭제합니다. 다시 임포트하기 전이나 더 이상 보관하고 싶지 않을 때 사용하세요. 삭제 전 사용자에게 확인받으세요.",
+      inputSchema: {
+        box_key: boxKeySchema,
+        room: z.string().max(100).describe("삭제할 채팅방 이름 (list_chat_rooms에 표시된 이름과 정확히 일치해야 함)"),
+      },
+    },
+    async ({ box_key, room }) => {
+      const box = store.getBox(box_key);
+      if (!box) return boxNotFound();
+      const deleted = store.deleteRoom(box_key, room);
+      return deleted > 0
+        ? text(`「${room}」 대화 ${deleted}건을 삭제했습니다.`)
+        : text(`「${room}」 채팅방을 찾을 수 없습니다. list_chat_rooms로 정확한 이름을 확인해 주세요.`, true);
+    }
+  );
+
+  server.registerTool(
     "memory_stats",
     {
       title: "기억상자 현황",
@@ -261,6 +391,7 @@ export function buildServer(store: MemoryStore): McpServer {
           `- 전체 기억: ${stats.total}건`,
           ...Object.entries(stats.byKind).map(([kind, count]) => `- ${KIND_LABEL[kind] ?? kind}: ${count}건`),
           `- 등장 인물: ${stats.people}명`,
+          `- 임포트된 카카오톡 대화: ${store.chatCount(box_key)}건`,
         ].join("\n")
       );
     }
@@ -288,4 +419,9 @@ function formatMemory(memory: Memory): string {
 
 function formatDate(iso: string): string {
   return iso.slice(0, 16).replace("T", " ");
+}
+
+function formatChat(message: ChatMessage): string {
+  const when = message.sent_at ? formatDate(message.sent_at) : "시각 미상";
+  return `#${message.id} [${message.room}] ${when} ${message.sender}: ${message.content}`;
 }

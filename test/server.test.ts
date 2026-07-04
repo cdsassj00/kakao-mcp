@@ -34,17 +34,50 @@ describe("MCP Streamable HTTP server", () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual([
+      "chat_context",
       "create_memory_box",
+      "delete_chat_room",
       "delete_memory_box",
       "export_memories",
       "forget",
+      "import_kakao_export",
+      "list_chat_rooms",
       "list_people",
       "list_promises",
       "memory_stats",
       "person_summary",
       "recall",
       "remember",
+      "search_chat",
     ]);
+  });
+
+  it("imports a KakaoTalk export and searches it", async () => {
+    const created = await client.callTool({
+      name: "create_memory_box",
+      arguments: { name: "임포트테스트" },
+    });
+    const boxKey = textOf(created).match(/box_key: ([0-9a-f-]{36})/)?.[1];
+
+    const imported = await client.callTool({
+      name: "import_kakao_export",
+      arguments: {
+        box_key: boxKey,
+        room: "철수",
+        text: [
+          "--------------- 2026년 7월 3일 금요일 ---------------",
+          "[철수] [오후 2:30] 식당은 온기정으로 예약했어",
+          "[나] [오후 2:31] 오 거기 좋지",
+        ].join("\n"),
+      },
+    });
+    expect(textOf(imported)).toContain("2건을 가져왔습니다");
+
+    const found = await client.callTool({
+      name: "search_chat",
+      arguments: { box_key: boxKey, query: "식당 예약" },
+    });
+    expect(textOf(found)).toContain("온기정");
   });
 
   it("supports the full remember → recall flow", async () => {

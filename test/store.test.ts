@@ -120,6 +120,44 @@ describe("MemoryStore", () => {
     expect(data?.box.name).toBe("테스트 상자");
   });
 
+  it("imports and searches chat messages", () => {
+    store.importChatMessages(boxId, "철수", [
+      { sender: "철수", sentAt: "2026-07-03T14:30", content: "내일 강남역 5번 출구에서 보자" },
+      { sender: "나", sentAt: "2026-07-03T14:31", content: "ㅇㅋ 몇 시?" },
+      { sender: "철수", sentAt: "2026-07-03T14:32", content: "12시 반" },
+    ]);
+    store.importChatMessages(boxId, "가족방", [
+      { sender: "엄마", sentAt: "2026-07-02T09:00", content: "주말에 집에 오니?" },
+    ]);
+
+    const hits = store.searchChat({ boxId, query: "강남역" });
+    expect(hits).toHaveLength(1);
+    expect(hits[0].sender).toBe("철수");
+
+    const roomFiltered = store.searchChat({ boxId, query: "오니", room: "가족방" });
+    expect(roomFiltered).toHaveLength(1);
+
+    const context = store.chatContext(boxId, hits[0].id, 5);
+    expect(context.map((m) => m.content)).toContain("12시 반");
+    expect(context.every((m) => m.room === "철수")).toBe(true);
+
+    const rooms = store.listRooms(boxId);
+    expect(rooms).toHaveLength(2);
+    expect(rooms.find((r) => r.room === "철수")?.count).toBe(3);
+
+    expect(store.deleteRoom(boxId, "철수")).toBe(3);
+    expect(store.searchChat({ boxId, query: "강남역" })).toHaveLength(0);
+    expect(store.chatCount(boxId)).toBe(1);
+  });
+
+  it("isolates chat messages between boxes", () => {
+    const otherBox = store.createBox("남의 상자").id;
+    store.importChatMessages(otherBox, "비밀방", [
+      { sender: "타인", sentAt: null, content: "비밀 대화" },
+    ]);
+    expect(store.searchChat({ boxId, query: "비밀" })).toHaveLength(0);
+  });
+
   it("reports stats", () => {
     store.addMemory({ boxId, content: "a", person: "철수", kind: "promise" });
     store.addMemory({ boxId, content: "b", person: "영희" });

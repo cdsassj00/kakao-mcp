@@ -5,6 +5,9 @@
 ## 1. 명시적 저장만 (No Silent Collection)
 - 어떤 대화도 자동으로 수집·저장하지 않습니다.
 - 사용자가 "기억해줘"라고 명시적으로 요청한 내용만 `remember` 도구를 통해 저장됩니다.
+- 카카오톡 대화 원문은 사용자가 카카오톡 공식 "대화 내보내기" 기능으로 직접 추출해
+  `import_kakao_export`에 스스로 제공한 경우에만 보관됩니다. 서버가 카카오톡에 접근하는
+  경로는 존재하지 않습니다.
 - MCP 서버의 `instructions`에도 "사용자가 명시적으로 요청했을 때만 저장"을 에이전트 규칙으로 명시했습니다.
 
 ## 2. 키 기반 격리 (Memory Box Isolation)
@@ -14,7 +17,8 @@
 
 ## 3. 삭제권과 이동권 (Right to Erasure & Portability)
 - `forget`: 개별 기억 즉시 영구 삭제
-- `delete_memory_box`: 상자 전체 영구 삭제 (사용자 재확인 후 실행)
+- `delete_chat_room`: 임포트한 채팅방 대화 전체 삭제
+- `delete_memory_box`: 상자 전체 영구 삭제 — 임포트된 대화 포함 (사용자 재확인 후 실행)
 - `export_memories`: 전체 기억 JSON 내보내기 (백업/이전)
 
 ## 4. 최소 보관
