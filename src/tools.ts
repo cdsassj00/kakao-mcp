@@ -1,8 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { buildGraph, egoRelationships, GraphEdge } from "./graph.js";
-import { parseKakaoExport } from "./kakao-parser.js";
-import { ChatMessage, Memory, MemoryStore, StoreError } from "./store.js";
+import { Memory, MemoryStore, StoreError } from "./store.js";
 
 const KIND_LABEL: Record<string, string> = {
   note: "메모",
@@ -16,12 +14,7 @@ const kindSchema = z
 
 const boxKeySchema = z.string().uuid().describe("기억상자 키 (create_memory_box로 발급받은 UUID)");
 
-export interface BuildOptions {
-  /** 배포된 서버의 공개 URL (예: https://remember.example.com). 업로드 페이지 링크 안내에 사용 */
-  publicUrl?: string;
-}
-
-export function buildServer(store: MemoryStore, options: BuildOptions = {}): McpServer {
+export function buildServer(store: MemoryStore): McpServer {
   const server = new McpServer(
     {
       name: "saram-sajeon",
@@ -31,13 +24,10 @@ export function buildServer(store: MemoryStore, options: BuildOptions = {}): Mcp
       instructions: [
         "「사람사전」은 내 주변 사람들의 사전입니다. 사람과 나눈 대화·약속·취향을 사용자 동의 하에 기록해 두었다가, 사람 이름으로 찾아볼 수 있게 해주는 개인 인맥 기록 서버입니다.",
         "처음 사용하는 사용자에게는 create_memory_box로 나만의 사전(기억상자)을 만들어 주고, 발급된 box_key를 사용자가 꼭 보관하도록 안내하세요.",
-        "사용자가 대화 내용을 기억해 달라고 하면 remember로 저장하고, 과거 대화를 물어보면 recall로 검색하세요.",
+        "사용자가 대화 내용을 기억해 달라고 하면 remember로 저장하고, 과거에 기억해 둔 것을 물어보면 recall로 검색하세요.",
+        "사람 이름이 나오는 기억은 person을 꼭 채워서 저장하세요. 나중에 person_summary로 그 사람의 사전 페이지처럼 펼쳐볼 수 있습니다.",
         "저장은 반드시 사용자가 명시적으로 요청했을 때만 하세요. 자동으로 대화를 수집하지 마세요.",
         "약속(promise)으로 저장된 기억은 list_promises로 모아볼 수 있습니다.",
-        "카카오톡 '대화 내보내기'로 뽑은 텍스트를 사용자가 붙여넣으면 import_kakao_export로 통째로 보관하고, search_chat으로 과거 대화 원문을 검색할 수 있습니다. 파일이 길면 여러 번에 나눠 임포트하면 됩니다.",
-        "내보내기 파일이 커서 붙여넣기 어렵다고 하면 upload_page_link로 업로드 페이지 주소를 안내하세요. 파일을 선택하면 자동으로 적재됩니다.",
-        "search_chat 결과의 맥락이 더 필요하면 chat_context로 앞뒤 대화를 확인하세요.",
-        "대화를 임포트해 두었다면 relationship_map으로 관계망 지도(누구와 얼마나 가까운지)를, relationship_strength로 특정 인물과의 강도를 보여줄 수 있습니다. 관계 강도는 대화 빈도·최근성·상호성의 결정론적 집계이므로 근거를 함께 설명하세요.",
       ].join("\n"),
     }
   );
@@ -256,241 +246,6 @@ export function buildServer(store: MemoryStore, options: BuildOptions = {}): Mcp
   );
 
   server.registerTool(
-    "import_kakao_export",
-    {
-      title: "카카오톡 대화 가져오기",
-      description:
-        "카카오톡 '대화 내보내기'(채팅방 설정 > 대화 내보내기)로 저장한 텍스트를 붙여넣으면 대화 원문을 통째로 보관합니다. PC/Android/iOS 내보내기 형식을 모두 지원합니다. 텍스트가 길면 잘라서 여러 번 호출하세요 (호출당 최대 약 400KB). 같은 채팅방을 다시 임포트하면 중복되므로, 다시 가져올 때는 먼저 delete_chat_room으로 비우라고 안내하세요.",
-      inputSchema: {
-        box_key: boxKeySchema,
-        room: z.string().max(100).describe("채팅방 이름 (예: 철수, 가족 단톡방)"),
-        text: z.string().max(400_000).describe("내보내기 파일의 텍스트 내용 (일부분씩 나눠도 됨)"),
-      },
-    },
-    async ({ box_key, room, text: exportText }) => {
-      const box = store.getBox(box_key);
-      if (!box) return boxNotFound();
-      const parsed = parseKakaoExport(exportText);
-      if (parsed.length === 0) {
-        return text(
-          "메시지를 하나도 인식하지 못했습니다. 카카오톡 '대화 내보내기' 원본 텍스트인지 확인해 주세요. (지원 형식: [이름] [오후 2:30] 내용 / 2026년 7월 4일 오후 2:30, 이름 : 내용 / 2026. 7. 4. 오후 2:30, 이름 : 내용)",
-          true
-        );
-      }
-      try {
-        const result = store.importChatMessages(box_key, room, parsed);
-        const first = parsed[0].sentAt ?? "?";
-        const last = parsed[parsed.length - 1].sentAt ?? "?";
-        return text(
-          `「${room}」 대화 ${result.imported}건을 가져왔습니다 (기간: ${first} ~ ${last}).\n기억상자 전체 보관 대화: ${result.total}건.\n이어지는 부분이 있으면 같은 방 이름으로 계속 임포트하세요.`
-        );
-      } catch (error) {
-        if (error instanceof StoreError) return text(error.message, true);
-        throw error;
-      }
-    }
-  );
-
-  server.registerTool(
-    "upload_page_link",
-    {
-      title: "대화 파일 업로드 페이지 안내",
-      description:
-        "카카오톡 '대화 내보내기' 파일을 붙여넣기 대신 파일 그대로 올릴 수 있는 업로드 페이지 주소를 알려줍니다. 파일이 크거나 모바일 사용자일 때 이 링크를 안내하세요.",
-      inputSchema: {
-        box_key: boxKeySchema.optional().describe("키를 넘기면 페이지에 미리 채워진 링크를 만들어 줍니다"),
-      },
-    },
-    async ({ box_key }) => {
-      if (!options.publicUrl) {
-        return text(
-          "업로드 페이지 주소가 설정되지 않았습니다 (서버 환경변수 PUBLIC_URL 필요). 대신 내보내기 텍스트를 채팅에 나눠 붙여넣으면 import_kakao_export로 가져올 수 있습니다.",
-          true
-        );
-      }
-      const url = box_key
-        ? `${options.publicUrl}/upload?box_key=${box_key}`
-        : `${options.publicUrl}/upload`;
-      return text(
-        `업로드 페이지: ${url}\n\n사용법을 함께 안내하세요:\n① 카카오톡 채팅방 ⚙️ 설정 → 대화 내용 내보내기 (텍스트만)\n② 위 링크를 열어 .txt 파일 선택\n③ 완료되면 이 채팅에서 바로 검색 가능 (search_chat)`
-      );
-    }
-  );
-
-  server.registerTool(
-    "search_chat",
-    {
-      title: "카카오톡 대화 검색",
-      description:
-        "임포트해 둔 카카오톡 대화 원문에서 키워드로 검색합니다. '철수가 식당 이름 뭐라고 했지?', '단톡방에서 계좌번호 얘기 찾아줘' 같은 질문에 사용하세요. 키워드는 공백으로 구분하면 모두 포함된 메시지를 찾습니다.",
-      inputSchema: {
-        box_key: boxKeySchema,
-        query: z.string().max(200).describe("검색 키워드 (공백 구분)"),
-        room: z.string().max(100).optional().describe("특정 채팅방으로 필터"),
-        sender: z.string().max(50).optional().describe("특정 발신자로 필터"),
-        limit: z.number().int().min(1).max(50).optional().describe("최대 결과 수 (기본 10)"),
-      },
-    },
-    async ({ box_key, query, room, sender, limit }) => {
-      const box = store.getBox(box_key);
-      if (!box) return boxNotFound();
-      const results = store.searchChat({ boxId: box_key, query, room, sender, limit });
-      if (results.length === 0) {
-        return text("검색 결과가 없습니다. 다른 키워드를 쓰거나 list_chat_rooms로 임포트된 채팅방을 확인해 보세요.");
-      }
-      return text(
-        `${results.length}건을 찾았습니다. (앞뒤 대화가 필요하면 chat_context에 메시지 번호를 넘기세요)\n\n${results
-          .map(formatChat)
-          .join("\n")}`
-      );
-    }
-  );
-
-  server.registerTool(
-    "chat_context",
-    {
-      title: "대화 맥락 보기",
-      description: "search_chat으로 찾은 메시지의 앞뒤 대화 흐름을 보여줍니다.",
-      inputSchema: {
-        box_key: boxKeySchema,
-        message_id: z.number().int().describe("기준 메시지 번호 (#id)"),
-        around: z.number().int().min(1).max(20).optional().describe("앞뒤로 몇 개씩 볼지 (기본 5)"),
-      },
-    },
-    async ({ box_key, message_id, around }) => {
-      const box = store.getBox(box_key);
-      if (!box) return boxNotFound();
-      const messages = store.chatContext(box_key, message_id, around ?? 5);
-      if (messages.length === 0) return text(`메시지 #${message_id}를 찾을 수 없습니다.`, true);
-      return text(messages.map((m) => (m.id === message_id ? `▶ ${formatChat(m)}` : formatChat(m))).join("\n"));
-    }
-  );
-
-  server.registerTool(
-    "list_chat_rooms",
-    {
-      title: "임포트된 채팅방 목록",
-      description: "가져온 카카오톡 채팅방 목록과 각 방의 메시지 수, 대화 기간을 보여줍니다.",
-      inputSchema: { box_key: boxKeySchema },
-    },
-    async ({ box_key }) => {
-      const box = store.getBox(box_key);
-      if (!box) return boxNotFound();
-      const rooms = store.listRooms(box_key);
-      if (rooms.length === 0) {
-        return text("아직 가져온 대화가 없습니다. 카카오톡 채팅방 설정 > 대화 내보내기로 텍스트를 뽑아 import_kakao_export로 가져올 수 있습니다.");
-      }
-      return text(
-        rooms
-          .map((r) => `- ${r.room}: ${r.count}건 (${r.first_at?.slice(0, 10) ?? "?"} ~ ${r.last_at?.slice(0, 10) ?? "?"})`)
-          .join("\n")
-      );
-    }
-  );
-
-  server.registerTool(
-    "delete_chat_room",
-    {
-      title: "채팅방 대화 삭제",
-      description: "임포트한 특정 채팅방의 대화를 전부 삭제합니다. 다시 임포트하기 전이나 더 이상 보관하고 싶지 않을 때 사용하세요. 삭제 전 사용자에게 확인받으세요.",
-      inputSchema: {
-        box_key: boxKeySchema,
-        room: z.string().max(100).describe("삭제할 채팅방 이름 (list_chat_rooms에 표시된 이름과 정확히 일치해야 함)"),
-      },
-    },
-    async ({ box_key, room }) => {
-      const box = store.getBox(box_key);
-      if (!box) return boxNotFound();
-      const deleted = store.deleteRoom(box_key, room);
-      return deleted > 0
-        ? text(`「${room}」 대화 ${deleted}건을 삭제했습니다.`)
-        : text(`「${room}」 채팅방을 찾을 수 없습니다. list_chat_rooms로 정확한 이름을 확인해 주세요.`, true);
-    }
-  );
-
-  server.registerTool(
-    "relationship_map",
-    {
-      title: "관계망 지도",
-      description:
-        "임포트된 대화에서 관계망을 계산해 가까운 사람 순위와 지도 이미지(SVG) 링크를 보여줍니다. '내 관계망 보여줘', '나 누구랑 제일 친해?' 같은 질문에 사용하세요. me에 사용자 본인의 카톡 표시 이름을 넣으면 본인 중심 지도가 됩니다.",
-      inputSchema: {
-        box_key: boxKeySchema,
-        me: z.string().max(50).optional().describe("사용자 본인의 카카오톡 표시 이름 (예: 홍길동)"),
-      },
-    },
-    async ({ box_key, me }) => {
-      const box = store.getBox(box_key);
-      if (!box) return boxNotFound();
-      const messages = store.exportChat(box_key);
-      if (messages.length === 0) {
-        return text("임포트된 대화가 없습니다. 카카오톡 '대화 내보내기' 텍스트를 먼저 넣어주세요 (import_kakao_export 또는 upload_page_link).");
-      }
-      const graph = buildGraph(messages);
-      const ranked = me ? egoRelationships(graph, me) : graph.edges;
-      if (me && ranked.length === 0) {
-        return text(
-          `「${me}」라는 이름의 발화자를 찾지 못했습니다. 등장인물: ${graph.nodes
-            .slice(0, 15)
-            .map((n) => n.name)
-            .join(", ")}\n이 중 본인 이름을 골라 다시 시도해 주세요.`,
-          true
-        );
-      }
-      const mapUrl = options.publicUrl
-        ? `${options.publicUrl}/map?box_key=${box_key}${me ? `&me=${encodeURIComponent(me)}` : ""}`
-        : null;
-      return text(
-        [
-          me
-            ? `「${me}」 중심 관계망 (인물 ${graph.nodes.length}명, 관계 ${graph.edges.length}쌍)`
-            : `관계망 (인물 ${graph.nodes.length}명, 관계 ${graph.edges.length}쌍)`,
-          ``,
-          ...ranked.slice(0, 10).map((e, i) => formatEdge(e, i + 1, me)),
-          ``,
-          mapUrl ? `🗺️ 관계망 지도 보기: ${mapUrl}` : "",
-          `* 강도는 대화 빈도 × 최근성 × 상호성의 결정론적 집계입니다 (최대 100).`,
-        ]
-          .filter(Boolean)
-          .join("\n")
-      );
-    }
-  );
-
-  server.registerTool(
-    "relationship_strength",
-    {
-      title: "관계 강도 분석",
-      description: "임포트된 대화를 바탕으로 특정 인물과의 관계 강도를 상세 분석합니다. '나랑 철수 얼마나 친해?' 같은 질문에 사용하세요.",
-      inputSchema: {
-        box_key: boxKeySchema,
-        person: z.string().max(50).describe("분석할 인물 이름"),
-        me: z.string().max(50).optional().describe("사용자 본인의 카톡 표시 이름"),
-      },
-    },
-    async ({ box_key, person, me }) => {
-      const box = store.getBox(box_key);
-      if (!box) return boxNotFound();
-      const graph = buildGraph(store.exportChat(box_key));
-      const edges = egoRelationships(graph, person).filter((e) => !me || e.a === me || e.b === me);
-      if (edges.length === 0) {
-        return text(`「${person}」와의 관계 데이터가 없습니다. 함께 있는 채팅방을 임포트했는지 확인해 주세요.`);
-      }
-      const node = graph.nodes.find((n) => n.name === person);
-      return text(
-        [
-          `「${person}」 관계 분석`,
-          `- 총 발화: ${node?.messageCount ?? 0}건, 함께한 방: ${node?.rooms.join(", ") ?? "-"}`,
-          ...edges.slice(0, 5).map((e) => {
-            const other = e.a === person ? e.b : e.a;
-            return `- ${other}와(과): 강도 ${e.score}/100, 상호작용 ${e.interactions}회, 마지막 ${e.lastAt?.slice(0, 10) ?? "?"} (${e.rooms.join(", ")})`;
-          }),
-        ].join("\n")
-      );
-    }
-  );
-
-  server.registerTool(
     "memory_stats",
     {
       title: "기억상자 현황",
@@ -507,7 +262,6 @@ export function buildServer(store: MemoryStore, options: BuildOptions = {}): Mcp
           `- 전체 기억: ${stats.total}건`,
           ...Object.entries(stats.byKind).map(([kind, count]) => `- ${KIND_LABEL[kind] ?? kind}: ${count}건`),
           `- 등장 인물: ${stats.people}명`,
-          `- 임포트된 카카오톡 대화: ${store.chatCount(box_key)}건`,
         ].join("\n")
       );
     }
@@ -535,16 +289,4 @@ function formatMemory(memory: Memory): string {
 
 function formatDate(iso: string): string {
   return iso.slice(0, 16).replace("T", " ");
-}
-
-function formatChat(message: ChatMessage): string {
-  const when = message.sent_at ? formatDate(message.sent_at) : "시각 미상";
-  return `#${message.id} [${message.room}] ${when} ${message.sender}: ${message.content}`;
-}
-
-function formatEdge(edge: GraphEdge, rank: number, me?: string): string {
-  const label = me ? (edge.a === me ? edge.b : edge.a) : `${edge.a} ↔ ${edge.b}`;
-  const filled = Math.max(1, Math.round(edge.score / 20));
-  const bar = "●".repeat(filled) + "○".repeat(Math.max(0, 5 - filled));
-  return `${rank}. ${label} ${bar} ${edge.score}/100 (상호작용 ${edge.interactions}회, 마지막 ${edge.lastAt?.slice(0, 10) ?? "?"})`;
 }

@@ -2,38 +2,35 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import express from "express";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { MemoryStore } from "./store.js";
-import { buildServer } from "./tools.js";
+import { LedgerStore } from "./ledger-store.js";
+import { buildLedgerServer } from "./ledger-tools.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
-const DB_PATH = process.env.DB_PATH ?? "data/memories.db";
+const DB_PATH = process.env.DB_PATH ?? "data/ledger.db";
 
-// K8s 등 실행 환경에 따라 DB_PATH가 쓰기 불가일 수 있으므로 /tmp로 폴백한다.
-function openStore(path: string): MemoryStore {
-  if (path === ":memory:") return new MemoryStore(path);
+function openStore(path: string): LedgerStore {
+  if (path === ":memory:") return new LedgerStore(path);
   try {
     mkdirSync(dirname(path), { recursive: true });
-    return new MemoryStore(path);
+    return new LedgerStore(path);
   } catch (error) {
-    const fallback = "/tmp/memories.db";
+    const fallback = "/tmp/ledger.db";
     console.warn(`DB 경로(${path})를 열 수 없어 ${fallback}로 폴백합니다:`, error);
-    return new MemoryStore(fallback);
+    return new LedgerStore(fallback);
   }
 }
 const store = openStore(DB_PATH);
 
-export function createApp(sharedStore: MemoryStore = store) {
+export function createLedgerApp(sharedStore: LedgerStore = store) {
   const app = express();
   app.use(express.json({ limit: "1mb" }));
 
   app.get("/healthz", (_req, res) => {
-    res.json({ ok: true, name: "saram-sajeon-mcp" });
+    res.json({ ok: true, name: "mal-gagyebu-mcp" });
   });
 
-  // Stateless Streamable HTTP: 요청마다 서버/트랜스포트를 생성해
-  // 세션 상태 없이 수평 확장이 가능하도록 한다.
   app.post("/mcp", async (req, res) => {
-    const server = buildServer(sharedStore);
+    const server = buildLedgerServer(sharedStore);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on("close", () => {
       void transport.close();
@@ -67,9 +64,9 @@ export function createApp(sharedStore: MemoryStore = store) {
   return app;
 }
 
-const isDirectRun = process.argv[1]?.endsWith("server.js") || process.argv[1]?.endsWith("server.ts");
+const isDirectRun = process.argv[1]?.endsWith("ledger-server.js") || process.argv[1]?.endsWith("ledger-server.ts");
 if (isDirectRun) {
-  createApp().listen(PORT, () => {
-    console.log(`saram-sajeon MCP server listening on :${PORT} (db: ${DB_PATH})`);
+  createLedgerApp().listen(PORT, () => {
+    console.log(`mal-gagyebu MCP server listening on :${PORT} (db: ${DB_PATH})`);
   });
 }

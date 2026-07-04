@@ -10,19 +10,17 @@ function textOf(result: Awaited<ReturnType<Client["callTool"]>>): string {
   return content.map((c) => c.text ?? "").join("\n");
 }
 
-describe("MCP Streamable HTTP server", () => {
+describe("사람사전 MCP server", () => {
   let httpServer: Server;
   let client: Client;
 
   beforeAll(async () => {
-    const app = createApp(new MemoryStore(":memory:"), "https://remember.example.com");
+    const app = createApp(new MemoryStore(":memory:"));
     httpServer = app.listen(0);
     const address = httpServer.address();
     if (typeof address !== "object" || !address) throw new Error("no address");
-    const url = new URL(`http://127.0.0.1:${address.port}/mcp`);
-
     client = new Client({ name: "test-client", version: "0.0.1" });
-    await client.connect(new StreamableHTTPClientTransport(url));
+    await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${address.port}/mcp`)));
   });
 
   afterAll(async () => {
@@ -30,117 +28,20 @@ describe("MCP Streamable HTTP server", () => {
     httpServer.close();
   });
 
-  it("lists all tools", async () => {
+  it("lists only chat-native tools", async () => {
     const { tools } = await client.listTools();
-    const names = tools.map((t) => t.name).sort();
-    expect(names).toEqual([
-      "chat_context",
+    expect(tools.map((t) => t.name).sort()).toEqual([
       "create_memory_box",
-      "delete_chat_room",
       "delete_memory_box",
       "export_memories",
       "forget",
-      "import_kakao_export",
-      "list_chat_rooms",
       "list_people",
       "list_promises",
       "memory_stats",
       "person_summary",
       "recall",
-      "relationship_map",
-      "relationship_strength",
       "remember",
-      "search_chat",
-      "upload_page_link",
     ]);
-  });
-
-  it("computes a relationship map from imported chats and serves the SVG", async () => {
-    const address = httpServer.address();
-    if (typeof address !== "object" || !address) throw new Error("no address");
-    const base = `http://127.0.0.1:${address.port}`;
-
-    const created = await client.callTool({ name: "create_memory_box", arguments: { name: "관계망" } });
-    const boxKey = textOf(created).match(/box_key: ([0-9a-f-]{36})/)?.[1];
-
-    await client.callTool({
-      name: "import_kakao_export",
-      arguments: {
-        box_key: boxKey,
-        room: "동창회",
-        text: [
-          "--------------- 2026년 7월 1일 수요일 ---------------",
-          "[홍길동] [오후 2:30] 이번 주말 모임 콜?",
-          "[철수] [오후 2:31] 콜",
-          "[홍길동] [오후 2:32] 영희는?",
-          "[영희] [오후 2:33] 나도 갈게",
-          "[철수] [오후 2:34] 좋다",
-        ].join("\n"),
-      },
-    });
-
-    const map = await client.callTool({
-      name: "relationship_map",
-      arguments: { box_key: boxKey, me: "홍길동" },
-    });
-    const mapText = textOf(map);
-    expect(mapText).toContain("「홍길동」 중심 관계망");
-    expect(mapText).toContain("철수");
-    expect(mapText).toContain("/100");
-    expect(mapText).toContain(`/map?box_key=${boxKey}`);
-
-    const strength = await client.callTool({
-      name: "relationship_strength",
-      arguments: { box_key: boxKey, person: "철수", me: "홍길동" },
-    });
-    expect(textOf(strength)).toContain("「철수」 관계 분석");
-
-    const svg = await fetch(`${base}/map?box_key=${boxKey}&me=${encodeURIComponent("홍길동")}`);
-    expect(svg.status).toBe(200);
-    expect(svg.headers.get("content-type")).toContain("image/svg+xml");
-    expect(await svg.text()).toContain("철수");
-
-    const missing = await fetch(`${base}/map?box_key=00000000-0000-0000-0000-000000000000`);
-    expect(missing.status).toBe(404);
-  });
-
-  it("serves the upload page and hands out its link via tool", async () => {
-    const address = httpServer.address();
-    if (typeof address !== "object" || !address) throw new Error("no address");
-    const page = await fetch(`http://127.0.0.1:${address.port}/upload`);
-    expect(page.status).toBe(200);
-    expect(await page.text()).toContain("대화 가져오기");
-
-    const link = await client.callTool({ name: "upload_page_link", arguments: {} });
-    expect(textOf(link)).toContain("https://remember.example.com/upload");
-  });
-
-  it("imports a KakaoTalk export and searches it", async () => {
-    const created = await client.callTool({
-      name: "create_memory_box",
-      arguments: { name: "임포트테스트" },
-    });
-    const boxKey = textOf(created).match(/box_key: ([0-9a-f-]{36})/)?.[1];
-
-    const imported = await client.callTool({
-      name: "import_kakao_export",
-      arguments: {
-        box_key: boxKey,
-        room: "철수",
-        text: [
-          "--------------- 2026년 7월 3일 금요일 ---------------",
-          "[철수] [오후 2:30] 식당은 온기정으로 예약했어",
-          "[나] [오후 2:31] 오 거기 좋지",
-        ].join("\n"),
-      },
-    });
-    expect(textOf(imported)).toContain("2건을 가져왔습니다");
-
-    const found = await client.callTool({
-      name: "search_chat",
-      arguments: { box_key: boxKey, query: "식당 예약" },
-    });
-    expect(textOf(found)).toContain("온기정");
   });
 
   it("supports the full remember → recall flow", async () => {
@@ -175,58 +76,12 @@ describe("MCP Streamable HTTP server", () => {
       arguments: { box_key: boxKey },
     });
     expect(textOf(promises)).toContain("약속 1건");
-  });
 
-  it("accepts uploads on /import and replaces re-uploaded rooms", async () => {
-    const address = httpServer.address();
-    if (typeof address !== "object" || !address) throw new Error("no address");
-    const base = `http://127.0.0.1:${address.port}`;
-
-    const created = await client.callTool({
-      name: "create_memory_box",
-      arguments: { name: "업로드테스트" },
+    const summary = await client.callTool({
+      name: "person_summary",
+      arguments: { box_key: boxKey, person: "철수" },
     });
-    const boxKey = textOf(created).match(/box_key: ([0-9a-f-]{36})/)?.[1];
-
-    const exportText = [
-      "영희 님과 카카오톡 대화",
-      "저장한 날짜 : 2026-07-04 12:00:00",
-      "",
-      "--------------- 2026년 7월 3일 금요일 ---------------",
-      "[영희] [오후 3:00] 계좌번호 보낼게 123-456",
-      "[나] [오후 3:01] 고마워",
-    ].join("\n");
-
-    const first = await fetch(`${base}/import?box_key=${boxKey}`, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain; charset=utf-8" },
-      body: exportText,
-    });
-    const firstResult = await first.json();
-    expect(firstResult).toMatchObject({ ok: true, room: "영희", imported: 2, replaced: 0 });
-
-    // 같은 방 재업로드 → 교체되어 중복이 생기지 않는다
-    const second = await fetch(`${base}/import?box_key=${boxKey}`, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain; charset=utf-8" },
-      body: exportText,
-    });
-    const secondResult = await second.json();
-    expect(secondResult).toMatchObject({ ok: true, imported: 2, replaced: 2 });
-
-    const found = await client.callTool({
-      name: "search_chat",
-      arguments: { box_key: boxKey, query: "계좌번호" },
-    });
-    expect(textOf(found)).toContain("1건");
-    expect(textOf(found)).toContain("123-456");
-
-    const unauthorized = await fetch(`${base}/import?box_key=00000000-0000-0000-0000-000000000000`, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain; charset=utf-8" },
-      body: exportText,
-    });
-    expect(unauthorized.status).toBe(401);
+    expect(textOf(summary)).toContain("「철수」에 대한 기억");
   });
 
   it("returns a friendly error for an unknown box", async () => {
@@ -236,23 +91,5 @@ describe("MCP Streamable HTTP server", () => {
     });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("기억상자를 찾을 수 없습니다");
-  });
-});
-
-describe("PUBLIC_URL 미설정 시 Host 헤더로 업로드 링크 유추", () => {
-  it("infers the upload link from the request host", async () => {
-    const app = createApp(new MemoryStore(":memory:"), "");
-    const httpServer = app.listen(0);
-    const address = httpServer.address();
-    if (typeof address !== "object" || !address) throw new Error("no address");
-
-    const client = new Client({ name: "test-client-2", version: "0.0.1" });
-    await client.connect(
-      new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${address.port}/mcp`))
-    );
-    const link = await client.callTool({ name: "upload_page_link", arguments: {} });
-    expect(textOf(link)).toContain(`http://127.0.0.1:${address.port}/upload`);
-    await client.close();
-    httpServer.close();
   });
 });
